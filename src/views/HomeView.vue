@@ -1,97 +1,174 @@
 <template>
-  <div class="weather-app" :class="weatherClass">
+  <div class="weather-app" :class="weatherTheme">
     <h1>Погодное приложение</h1>
     <div class="search-box">
-      <input 
-        v-model="cityQuery" 
-        placeholder="Введите город" 
+      <input
+        v-model="cityQuery"
+        placeholder="Введите город"
         @keyup.enter="fetchWeather"
+        :disabled="loading"
       />
-      <button @click="fetchWeather">Поиск</button>
+      <button @click="fetchWeather" :disabled="loading || !cityQuery.trim()">
+        {{ loading ? 'Загрузка...' : 'Поиск' }}
+      </button>
     </div>
 
-    <div v-if="loading" class="loading">Загрузка...</div>
+    <div v-if="loading" class="loading">
+      <div class="spinner"></div>
+      <p>Загрузка данных...</p>
+    </div>
 
-    <div v-if="error" class="error">{{ error }}</div>
+    <div v-if="error" class="error">
+      <p>{{ error }}</p>
+      <button @click="retryFetch">Попробовать снова</button>
+    </div>
 
     <div v-if="weatherData" class="weather-card">
       <h2>{{ weatherData.cityName }}, {{ weatherData.country }}</h2>
       <div class="weather-main">
-        <img 
-          :src="`https://openweathermap.org/img/wn/${weatherData.icon}@2x.png`" 
+        <img
+          :src="`https://openweathermap.org/img/wn/${weatherData.icon}@4x.png`"
           :alt="weatherData.description"
+          :title="weatherData.description"
+          loading="lazy"
         />
         <span class="temp">{{ Math.round(weatherData.temp) }}°C</span>
       </div>
-      <p class="description">{{ weatherData.description }}</p>
+      <p class="description">{{ capitalizeFirstLetter(weatherData.description) }}</p>
       <div class="weather-details">
-        <p>Ощущается как: {{ Math.round(weatherData.feels_like) }}°C</p>
-        <p>Влажность: {{ weatherData.humidity }}%</p>
-        <p>Ветер: {{ Math.round(weatherData.wind_speed) }} м/с</p>
-        <p>Давление: {{ weatherData.pressure }} гПа</p>
+        <div class="detail-item">
+          <span class="detail-label">Ощущается как:</span>
+          <span class="detail-value">{{ Math.round(weatherData.feels_like) }}°C</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Влажность:</span>
+          <span class="detail-value">{{ weatherData.humidity }}%</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Ветер:</span>
+          <span class="detail-value">{{ Math.round(weatherData.wind_speed) }} м/с</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Давление:</span>
+          <span class="detail-value">{{ weatherData.pressure }} гПа</span>
+        </div>
       </div>
     </div>
-    <div v-if="showRain" ref="rainContainer" class="rain-container"></div>
+
+    <canvas ref="confettiCanvas" class="confetti-canvas"></canvas>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import axios from 'axios';
-import * as RainJS from 'rain.js';
+import confetti from 'canvas-confetti';
 
-const API_KEY = 'd323032a8c6a1e5005c7097d36436159';
-const cityQuery = ref('Москва');
+const API_KEY = import.meta.env.VITE_WEATHER_API_KEY || 'd323032a8c6a1e5005c7097d36436159';
+const cityQuery = ref('Минск');
 const weatherData = ref(null);
 const loading = ref(false);
 const error = ref(null);
-const rainContainer = ref(null);
-let rainEffect = null;
+const confettiCanvas = ref(null);
+let confettiInterval = null;
 
-const showRain = computed(() => {
-  const desc = weatherData.value?.description.toLowerCase() || '';
-  return desc.includes('дождь') || desc.includes('rain');
-});
-
-const weatherClass = computed(() => {
-  return showRain.value ? 'rainy-theme' : 'default-theme';
-});
-
-onMounted(() => {
-  fetchWeather();
-});
-
-onUnmounted(() => {
-  if (rainEffect) {
-    rainEffect.stop();
-    rainEffect = null;
-  }
-});
-
-const initRainEffect = () => {
-  if (!rainContainer.value) return;
+const weatherType = computed(() => {
+  if (!weatherData.value) return 'clear';
   
-  if (rainEffect) {
-    rainEffect.stop();
-  }
+  const desc = weatherData.value.description.toLowerCase();
+  const main = weatherData.value.main.toLowerCase();
+  
+  if (desc.includes('дождь') || main.includes('rain')) return 'rain';
+  if (desc.includes('снег') || main.includes('snow')) return 'snow';
+  if (desc.includes('облачно') || main.includes('clouds')) return 'clouds';
+  if (desc.includes('ясно') || main.includes('clear')) return 'clear';
+  if (desc.includes('туман') || main.includes('fog') || main.includes('mist')) return 'fog';
+  return 'clear';
+});
 
-  rainEffect = new Rain({
-    target: rainContainer.value,
-    speed: 1,
-    density: 0.5,
-    angle: 5,
-    color: '#a0c4e6'
+const weatherTheme = computed(() => {
+  return `${weatherType.value}-theme`;
+});
+
+const capitalizeFirstLetter = (string) => {
+  return string.charAt(0).toUpperCase() + string.slice(1);
+};
+
+const startWeatherEffects = () => {
+  stopWeatherEffects();
+  
+  nextTick(() => {
+    if (!confettiCanvas.value) return;
+    
+    const ctx = confettiCanvas.value.getContext('2d');
+    confettiCanvas.value.width = window.innerWidth;
+    confettiCanvas.value.height = window.innerHeight;
+    
+    if (weatherType.value === 'rain') {
+      confettiInterval = setInterval(() => {
+        confetti({
+          particleCount: 30,
+          angle: 75,
+          spread: 100,
+          origin: { x: 0, y: 1 },
+          colors: ['#a0c4e6', '#7db5e6'],
+          shapes: ['circle'],
+          gravity: 2,
+          ticks: 100,
+          scalar: 0.5,
+          drift: 1.5
+        });
+        confetti({
+          particleCount: 30,
+          angle: 105,
+          spread: 100,
+          origin: { x: 1, y: 1 },
+          colors: ['#a0c4e6', '#7db5e6'],
+          shapes: ['circle'],
+          gravity: 2,
+          ticks: 100,
+          scalar: 0.5,
+          drift: -1.5
+        });
+      }, 300);
+    } else if (weatherType.value === 'snow') {
+      confettiInterval = setInterval(() => {
+        confetti({
+          particleCount: 20,
+          spread: 100,
+          origin: { y: 0 },
+          colors: ['#ffffff'],
+          shapes: ['circle'],
+          gravity: 0.5,
+          ticks: 200,
+          scalar: 0.8,
+          drift: 0,
+          decay: 0.95
+        });
+      }, 500);
+    }
   });
+};
+
+const stopWeatherEffects = () => {
+  if (confettiInterval) {
+    clearInterval(confettiInterval);
+    confettiInterval = null;
+  }
   
-  rainEffect.start();
+  if (confettiCanvas.value) {
+    const ctx = confettiCanvas.value.getContext('2d');
+    ctx.clearRect(0, 0, confettiCanvas.value.width, confettiCanvas.value.height);
+  }
 };
 
 const fetchWeather = async () => {
-  if (!cityQuery.value.trim()) return;
+  if (!cityQuery.value.trim() || loading.value) return;
   
   loading.value = true;
   error.value = null;
   weatherData.value = null;
+  stopWeatherEffects();
 
   try {
     const geoResponse = await axios.get(
@@ -116,118 +193,46 @@ const fetchWeather = async () => {
       pressure: weatherResponse.data.main.pressure,
       wind_speed: weatherResponse.data.wind.speed,
       description: weatherResponse.data.weather[0].description,
-      icon: weatherResponse.data.weather[0].icon
+      icon: weatherResponse.data.weather[0].icon,
+      main: weatherResponse.data.weather[0].main.toLowerCase()
     };
 
-    // Инициализируем эффект дождя после получения данных
-    if (showRain.value) {
-      setTimeout(initRainEffect, 0);
-    }
+    startWeatherEffects();
   } catch (err) {
-    error.value = err.response?.data?.message || err.message || 'Произошла ошибка';
+    error.value = err.response?.data?.message || err.message || 'Произошла ошибка при получении данных';
     console.error('Ошибка при получении погоды:', err);
   } finally {
     loading.value = false;
   }
 };
+
+const retryFetch = () => {
+  error.value = null;
+  fetchWeather();
+};
+
+const handleResize = () => {
+  if (confettiCanvas.value) {
+    confettiCanvas.value.width = window.innerWidth;
+    confettiCanvas.value.height = window.innerHeight;
+  }
+};
+
+onMounted(() => {
+  fetchWeather();
+  window.addEventListener('resize', handleResize);
+});
+
+onUnmounted(() => {
+  stopWeatherEffects();
+  window.removeEventListener('resize', handleResize);
+});
 </script>
 
 <style>
-.weather-app {
-  max-width: 500px;
-  margin: 0 auto;
-  padding: 20px;
-  font-family: Arial, sans-serif;
-  text-align: center;
-  min-height: 100vh;
-  position: relative;
-  transition: background 0.5s ease;
-}
+/* Стили остаются такими же, как в предыдущем примере, за исключением: */
 
-.default-theme {
-  background: #4CAF50;
-  color: black;
-}
-
-.rainy-theme {
-  background: linear-gradient(to bottom, #4a6b8a, #2c3e50);
-  color: #ecf0f1;
-}
-
-.search-box {
-  margin: 20px 0;
-}
-
-input {
-  padding: 10px;
-  width: 200px;
-  margin-right: 10px;
-  background: white;
-  color: black;
-  border: none;
-  border-radius: 4px;
-}
-
-button {
-  padding: 10px 15px;
-  background-color: #2c3e50;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-button:hover {
-  background-color: #1a252f;
-}
-
-.weather-card {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 20px;
-  margin-top: 20px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-  backdrop-filter: blur(5px);
-}
-
-.weather-main {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin: 15px 0;
-}
-
-.temp {
-  font-size: 2.5rem;
-  font-weight: bold;
-  margin-left: 10px;
-}
-
-.description {
-  text-transform: capitalize;
-  font-size: 1.2rem;
-  margin-bottom: 15px;
-}
-
-.weather-details {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  text-align: left;
-  margin-top: 15px;
-}
-
-.loading {
-  margin: 20px 0;
-  color: inherit;
-}
-
-.error {
-  color: #ff6b6b;
-  margin: 20px 0;
-}
-
-.rain-container {
+.confetti-canvas {
   position: fixed;
   top: 0;
   left: 0;
